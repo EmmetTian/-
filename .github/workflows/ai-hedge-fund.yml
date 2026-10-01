@@ -1,0 +1,82 @@
+name: AI Hedge Fund 投资大师会诊
+
+# 手动运行：巴菲特、芒格、格雷厄姆、彼得·林奇、德鲁肯米勒五位投资人角色分别给股票打分。
+# 需要 Secrets：ANTHROPIC_API_KEY、FINANCIAL_DATASETS_API_KEY（financialdatasets.ai，付费数据源）。
+# 报告提交到仓库的 ai-hedge-fund-reports/ 目录，并显示在本次运行的 Summary 页面。
+on:
+  workflow_dispatch:
+    inputs:
+      tickers:
+        description: '股票代码，多个用逗号分隔（美股代码，如 SAP,NVDA,MSFT）'
+        required: true
+        default: 'SAP'
+      model:
+        description: '投资人角色使用的模型'
+        required: true
+        default: 'claude-sonnet-5'
+        type: choice
+        options:
+          - claude-sonnet-5
+          - claude-haiku-4-5
+          - claude-opus-5-5
+      analysis_date:
+        description: '分析日期 YYYY-MM-DD（留空 = 最新）'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ai-hedge-fund
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 设置 Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: 安装 ai-hedge-fund
+        run: |
+          pip install --upgrade pip
+          pip install aihf
+
+      - name: 运行投资大师会诊
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FINANCIAL_DATASETS_API_KEY: ${{ secrets.FINANCIAL_DATASETS_API_KEY }}
+          TICKERS: ${{ inputs.tickers }}
+          MODEL: ${{ inputs.model }}
+          ANALYSIS_DATE: ${{ inputs.analysis_date }}
+        run: |
+          if [ -z "$FINANCIAL_DATASETS_API_KEY" ]; then
+            echo "::error::缺少 FINANCIAL_DATASETS_API_KEY，请先在 Settings → Secrets 里添加。"
+            exit 1
+          fi
+          DATE_ARGS=()
+          if [ -n "$ANALYSIS_DATE" ]; then DATE_ARGS=(--date "$ANALYSIS_DATE"); fi
+          RUN_DIR="ai-hedge-fund-reports/$(echo "$TICKERS" | tr -d ' ' | tr ',' '-' | tr '[:lower:]' '[:upper:]')_$(date -u +%Y-%m-%d)"
+          mkdir -p "$RUN_DIR"
+          aihf ai-hedge-fund/masters.yaml --tickers "$TICKERS" --model "$MODEL" "${DATE_ARGS[@]}" --out "$RUN_DIR/record.json" > /dev/null
+          python ai-hedge-fund/render_report.py "$RUN_DIR/record.json" "$RUN_DIR/report.md"
+          cat "$RUN_DIR/report.md" >> "$GITHUB_STEP_SUMMARY"
+          echo "Report: $RUN_DIR/report.md"
+
+      - name: 保存报告到仓库
+        env:
+          TICKERS: ${{ inputs.tickers }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ai-hedge-fund-reports
+          git commit -m "Add AI Hedge Fund report for $TICKERS" || echo "No changes"
+          git pull --rebase
+          git push

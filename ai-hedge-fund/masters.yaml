@@ -1,0 +1,20 @@
+# 投资大师组合：只保留五位价值/宏观投资人角色，用来做个股研究，不做真实交易。
+# 由 .github/workflows/ai-hedge-fund.yml 调用，股票代码在运行时输入。
+schema_version: 2
+name: investing-masters
+strategies:
+  - name: masters
+    blend: {mode: long_only}
+    weight: 1.0
+    models:
+      - name: buffett
+      - name: munger
+      - name: graham
+      - name: lynch
+      - name: druckenmiller
+risk:
+  max_position_pct: 0.25
+  max_gross_exposure: 1.0
+capital: 100000
+rebalance: weekly
+benchmark: SPY
