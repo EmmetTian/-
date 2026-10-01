@@ -1,0 +1,120 @@
+name: TradingAgents 多分析师研究
+
+# 手动运行：在 Actions 页面选择本工作流，输入股票代码后点 Run workflow。
+# 报告会提交到仓库的 tradingagents-reports/ 目录，并显示在本次运行的 Summary 页面。
+on:
+  workflow_dispatch:
+    inputs:
+      ticker:
+        description: '股票代码（美股如 SAP、NVDA；德股加 .DE，如 ENR.DE；港股如 0700.HK）'
+        required: true
+        default: 'SAP'
+      trade_date:
+        description: '分析日期 YYYY-MM-DD（留空 = 最近一个工作日）'
+        required: false
+        default: ''
+      deep_model:
+        description: '深度思考模型（多空辩论、最终决策）'
+        required: true
+        default: 'claude-sonnet-5'
+        type: choice
+        options:
+          - claude-sonnet-5
+          - claude-haiku-4-5
+          - claude-opus-5-5
+      quick_model:
+        description: '快速模型（各分析师收集数据）'
+        required: true
+        default: 'claude-haiku-4-5'
+        type: choice
+        options:
+          - claude-haiku-4-5
+          - claude-sonnet-5
+      language:
+        description: '报告语言'
+        required: true
+        default: 'Chinese'
+        type: choice
+        options:
+          - Chinese
+          - English
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tradingagents
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 设置 Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: 安装 TradingAgents
+        run: |
+          pip install --upgrade pip
+          pip install "git+https://github.com/TauricResearch/TradingAgents.git"
+
+      - name: 运行多分析师研究
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          TRADINGAGENTS_LLM_PROVIDER: anthropic
+          TRADINGAGENTS_DEEP_THINK_LLM: ${{ inputs.deep_model }}
+          TRADINGAGENTS_QUICK_THINK_LLM: ${{ inputs.quick_model }}
+          TRADINGAGENTS_OUTPUT_LANGUAGE: ${{ inputs.language }}
+          TRADINGAGENTS_LLM_MAX_RETRIES: '5'
+          TICKER: ${{ inputs.ticker }}
+          TRADE_DATE: ${{ inputs.trade_date }}
+        run: |
+          python - <<'PY'
+          import datetime
+          import os
+          import pathlib
+
+          from tradingagents.default_config import DEFAULT_CONFIG
+          from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+          ticker = os.environ["TICKER"].strip().upper()
+          trade_date = os.environ.get("TRADE_DATE", "").strip()
+          if not trade_date:
+              day = datetime.date.today() - datetime.timedelta(days=1)
+              while day.weekday() >= 5:
+                  day -= datetime.timedelta(days=1)
+              trade_date = day.isoformat()
+
+          graph = TradingAgentsGraph(config=DEFAULT_CONFIG.copy())
+          final_state, signal = graph.propagate(ticker, trade_date)
+
+          out_dir = pathlib.Path("tradingagents-reports") / f"{ticker}_{trade_date}"
+          report_path = graph.save_reports(final_state, ticker, save_path=out_dir)
+
+          decision = final_state.get("final_trade_decision", "")
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as f:
+                  f.write(f"# {ticker}（{trade_date}）评级：{signal}\n\n")
+                  f.write(f"完整报告：`{report_path}`\n\n---\n\n{decision}\n")
+          print(f"Rating: {signal}")
+          print(f"Report: {report_path}")
+          PY
+
+      - name: 保存报告到仓库
+        env:
+          TICKER: ${{ inputs.ticker }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tradingagents-reports
+          git commit -m "Add TradingAgents report for $TICKER" || echo "No changes"
+          git pull --rebase
+          git push
