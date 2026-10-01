@@ -10,7 +10,7 @@ on:
         required: true
         default: 'SAP'
       trade_date:
-        description: '分析日期 YYYY-MM-DD（留空 = 最近一个工作日）'
+        description: '分析日期 YYYY-MM-DD（留空 = 今天；填过去日期时，非美国公司如 SAP 拿不到财报数据）'
         required: false
         default: ''
       deep_model:
@@ -87,10 +87,9 @@ jobs:
           ticker = os.environ["TICKER"].strip().upper()
           trade_date = os.environ.get("TRADE_DATE", "").strip()
           if not trade_date:
-              day = datetime.date.today() - datetime.timedelta(days=1)
-              while day.weekday() >= 5:
-                  day -= datetime.timedelta(days=1)
-              trade_date = day.isoformat()
+              # 用今天：TradingAgents 对“过去日期”会屏蔽没有申报日期的财报数据
+              # （防止用到未来信息），非美国公司（如 SAP）因此会拿不到基本面。
+              trade_date = datetime.date.today().isoformat()
 
           graph = TradingAgentsGraph(config=DEFAULT_CONFIG.copy())
           final_state, signal = graph.propagate(ticker, trade_date)
