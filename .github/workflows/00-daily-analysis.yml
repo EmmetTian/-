@@ -31,6 +31,9 @@ concurrency:
 jobs:
   analyze:
     runs-on: ubuntu-latest
+    # 允许把报告提交回仓库（daily-reports/）
+    permissions:
+      contents: write
     # 兼容误将 STOCK_LIST 配到同名 Environment variables 的场景；
     # 推荐位置仍是 Settings -> Secrets and variables -> Actions -> Repository variables。
     environment: STOCK_LIST
@@ -562,4 +565,30 @@ jobs:
           if [ -f "logs/stock_analysis_$(date +%Y%m%d).log" ]; then
             echo "📜 最近日志（最后 30 行）:"
             tail -30 logs/stock_analysis_*.log 2>/dev/null || echo "无日志"
+          fi
+
+      - name: 汇总运行中的错误（显示为 Annotations）
+        if: always()
+        run: |
+          if ls logs/*.log >/dev/null 2>&1; then
+            grep -h -E "ERROR|CRITICAL|Traceback" logs/*.log | cut -c1-300 | tail -n 10 | while IFS= read -r line; do
+              echo "::warning title=运行日志错误::${line}"
+            done
+          fi
+
+      - name: 保存报告到仓库
+        if: always()
+        run: |
+          if [ -d reports ] && [ "$(ls -A reports 2>/dev/null)" ]; then
+            DEST="daily-reports/$(date -u +%Y-%m-%d)_run${{ github.run_number }}"
+            mkdir -p "$DEST"
+            cp -r reports/. "$DEST/"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add daily-reports
+            git commit -m "Add daily stock analysis reports (run ${{ github.run_number }})" || echo "No changes"
+            git pull --rebase
+            git push
+          else
+            echo "没有生成报告，跳过保存"
           fi
